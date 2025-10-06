@@ -1,0 +1,8 @@
+<form method="post">
+    {% csrf_token %}
+    {{ form.as_p }}
+    <button type="submit">Login</button>
+</form>
+<p style="text-align: center; margin-top: 15px;">
+    <a href="{% url 'password_reset' %}">Forgot your password?</a>
+</p>

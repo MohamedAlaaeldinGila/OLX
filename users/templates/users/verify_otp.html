@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Verify Your Identity</title>
+    <style>
+        .container { max-width: 400px; margin: 50px auto; padding: 20px; }
+        .form-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; }
+        input[type="text"] { width: 100%; padding: 8px; border: 1px solid #ddd; }
+        .btn { background: #007bff; color: white; padding: 10px 15px; border: none; cursor: pointer; }
+        .error { color: red; margin-bottom: 15px; }
+        .success { color: green; margin-bottom: 15px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>Verify Your Identity</h2>
+        
+        {% if error %}
+            <div class="error">{{ error }}</div>
+        {% endif %}
+        
+        {% if not expired %}
+            <p>We've sent a 6-digit verification code to your email address: <strong>{{ user.email }}</strong></p>
+            <p>The code will expire in 5 minutes.</p>
+            
+            <form method="post">
+                {% csrf_token %}
+                <div class="form-group">
+                    <label for="otp_code">Enter Verification Code:</label>
+                    <input type="text" id="otp_code" name="otp_code" maxlength="6" required 
+                           pattern="[0-9]{6}" title="Enter 6-digit code">
+                </div>
+                <button type="submit" class="btn">Verify & Login</button>
+            </form>
+            
+            <p style="margin-top: 20px;">
+                Didn't receive the code? 
+                <a href="{% url 'resend-otp' %}">Resend OTP</a>
+            </p>
+        {% else %}
+            <a href="{% url 'login' %}" class="btn">Back to Login</a>
+        {% endif %}
+    </div>
+</body>
+</html>
