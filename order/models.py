@@ -5,6 +5,7 @@ import string
 
 from product.models import Product
 from .constants import DEFAULT_OrderStatus, DEFAULT_PaymentStatus
+from users.models import Notification
 
 class OrderStatus(models.Model):
     """Configurable order statuses"""
@@ -109,13 +110,58 @@ class Order(models.Model):
         return f"Order #{self.order_number} - {self.user.username}"
     
     def save(self, *args, **kwargs):
+        # 1. Check if status is changing
+        status_changed = False
+        old_status = None
+        
+        if self.pk:  # This order already exists in database
+            old_order = Order.objects.get(pk=self.pk)
+            old_status = old_order.status
+            if old_status != self.status:
+                status_changed = True
+        
+        # 2. Your existing logic
         if not self.order_number:
             self.order_number = self.generate_order_number()
-        self.total = self.subtotal + self.tax_amount + self.shipping_cost #- self.discount_amount
+        self.total = self.subtotal + self.tax_amount + self.shipping_cost
+        
+        # 3. Save first (so we have ID for notification)
         super().save(*args, **kwargs)
+        
+        # 4. Send notification AFTER saving
+        if status_changed and old_status:
+            self.send_status_change_notification(old_status, self.status)
     
     def generate_order_number(self):
         return f"ORD{''.join(random.choices(string.digits, k=10))}"
+
+    def send_status_change_notification(self, old_status, new_status):
+        
+        # Define status messages
+        status_messages = {
+            'pending': "Your order has been placed successfully!",
+            'confirmed': "Order confirmed! We're preparing your items.",
+            'processing': "Your order is being processed.",
+            'shipped': f"Your order has been shipped! {'Tracking: ' + self.tracking_number if self.tracking_number else 'Tracking number will be updated soon.'}",
+            'delivered': "Your order has been delivered! Enjoy your purchase.",
+            'cancelled': "Your order has been cancelled.",
+            'refunded': "Your refund has been processed.",
+        }
+        
+        # Get the appropriate message
+        message = status_messages.get(
+            new_status.code, 
+            f"Your order status has been updated from {old_status.name} to {new_status.name}"
+        )
+        
+        # Send notification using your existing method
+        Notification.send_notification(
+            user=self.user.userprofile,  # Adjust based on your user model
+            title=f"Order #{self.order_number} Update",
+            message=message,
+            notification_type_code='order',
+            action_url=f"/orders/{self.id}/"
+        )
 
 class OrderItem(models.Model):
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='items')

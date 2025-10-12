@@ -8,6 +8,8 @@ from django.conf import settings
 import random 
 from django.utils import timezone
 from datetime import timedelta
+from rest_framework import serializers
+from .constants import DEFAULT_NotificationType
 
 
 
@@ -90,7 +92,8 @@ class Notification(models.Model):
     notification_type = models.ForeignKey(
         NotificationType, 
         on_delete=models.PROTECT,
-        related_name='notifications'  # ✅ Add related_name
+        related_name='notifications',  # ✅ Add related_name
+        default= DEFAULT_NotificationType.SYSTEM
     )
     is_read = models.BooleanField(default=False)
     read_at = models.DateTimeField(blank=True, null=True)
@@ -171,7 +174,6 @@ class Notification(models.Model):
         cls.objects.bulk_create(notifications)
         return len(notifications)
     
-
 
 class OTP(models.Model):
     """Secure OTP storage instead of session"""
@@ -258,3 +260,4 @@ class OTP(models.Model):
             
         except cls.DoesNotExist:
             return False, "No active OTP found. Please request a new one."
+         
