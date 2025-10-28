@@ -14,6 +14,11 @@ from .serializers import NotificationSerializer
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.authtoken.models import Token
 from rest_framework.authentication import TokenAuthentication
+
+from rest_framework_simplejwt.tokens import RefreshToken  # ✅ ADD THIS IMPORT
+from rest_framework_simplejwt.authentication import JWTAuthentication  # ✅ AND THIS
+from rest_framework_simplejwt.exceptions import TokenError, InvalidToken  # ✅ AND THIS
+
 from .serializers import (
     UserRegistrationSerializer, UserLoginSerializer, 
     UserProfileSerializer, UserProfileUpdateSerializer,
@@ -194,7 +199,7 @@ class UserRegistrationAPIView(APIView):
             user = serializer.save()
             
             # Create token for automatic login after registration
-            token, created = Token.objects.get_or_create(user=user)
+            refresh = RefreshToken.for_user(user)
             
             return Response({
                 'message': 'User registered successfully',
@@ -203,9 +208,13 @@ class UserRegistrationAPIView(APIView):
                     'username': user.username,
                     'email': user.email,
                     'first_name': user.first_name,
-                    'last_name': user.last_name
+                    'last_name': user.last_name,
+                    'user_type': user.user_type
                 },
-                'token': token.key
+                'tokens': {
+                    'refresh': str(refresh),
+                    'access': str(refresh.access_token),
+                }
             }, status=status.HTTP_201_CREATED)
         
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -237,8 +246,9 @@ class UserLoginAPIView(APIView):
             if user.check_password(password):
                 if user.is_active:
                     # ✅ Create or get token (NO login() function!)
-                    token, created = Token.objects.get_or_create(user=user)
-                    print(f"🔍 DEBUG: Token created: {token.key}")
+                    refresh = RefreshToken.for_user(user)
+                    access_token = str(refresh.access_token)
+                    refresh_token = str(refresh)
                     
                     return Response({
                         'message': 'Login successful',
@@ -250,7 +260,10 @@ class UserLoginAPIView(APIView):
                             'last_name': user.last_name,
                             'user_type': user.user_type
                         },
-                        'token': token.key
+                        'tokens': {
+                            'refresh': refresh_token,
+                            'access': access_token,
+                        }
                     })
                 else:
                     return Response(
