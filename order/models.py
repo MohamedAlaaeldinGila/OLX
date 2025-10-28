@@ -6,6 +6,8 @@ import string
 from product.models import Product
 from .constants import DEFAULT_OrderStatus, DEFAULT_PaymentStatus
 from users.models import Notification
+from django.utils import timezone
+from product.models import Discount
 
 class OrderStatus(models.Model):
     """Configurable order statuses"""
@@ -81,7 +83,8 @@ class Order(models.Model):
     subtotal = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     tax_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     shipping_cost = models.DecimalField(max_digits=10, decimal_places=2, default=0)
-    #discount_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    discount = models.ForeignKey('product.Discount', on_delete=models.SET_NULL, null=True, blank=True)
+    discount_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     total = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     
     # Shipping Information
