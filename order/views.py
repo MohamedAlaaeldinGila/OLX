@@ -1,3 +1,4 @@
+from decimal import Decimal
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -5,9 +6,9 @@ from django.utils import timezone
 from django.shortcuts import get_object_or_404
 from .models import Order, OrderItem, OrderStatus, PaymentStatus, OrderStatusHistory
 from .serializers import (
-    OrderSerializer, OrderCreateSerializer, OrderUpdateSerializer,
+    OrderItemUpdateSerializer, OrderSerializer, OrderCreateSerializer, OrderUpdateSerializer,
     OrderStatusSerializer, PaymentStatusSerializer,
-    OrderStatusHistorySerializer
+    OrderStatusHistorySerializer, OrderItemSerializer
 )
 
 class OrderListCreateAPIView(APIView):
@@ -24,24 +25,51 @@ class OrderListCreateAPIView(APIView):
         })
     
     def post(self, request):
-        serializer = OrderCreateSerializer(
-            data=request.data, 
-            context={'request': request}
-        )
+        # Check if user has existing cart order
+        cart_status = OrderStatus.objects.get(code='cart')
+        existing_order = Order.objects.filter(user=request.user, status=cart_status).first()
+        
+        serializer = OrderCreateSerializer(data=request.data, context={'request': request})
         if serializer.is_valid():
+            if existing_order:
+                # Add new items to existing cart
+                items_data = serializer.validated_data.pop('items', [])
+                for item_data in items_data:
+                    product = item_data['product']
+                    quantity = item_data['quantity']
+                    price = item_data.get('price', product.price)
+                    
+                    # Check if item already exists in cart
+                    order_item, created = OrderItem.objects.get_or_create(
+                        order=existing_order, product=product,
+                        defaults={'quantity': quantity, 'price': price}
+                    )
+                    if not created:
+                        order_item.quantity += quantity
+                        order_item.save()
+
+                    subtotal = sum(item.price * item.quantity for item in existing_order.items.all())
+                    existing_order.subtotal = subtotal
+                    existing_order.tax_amount = subtotal * Decimal('0.1')  # example 10% tax
+                    existing_order.shipping_cost = 10  # fixed or dynamic
+                    existing_order.total = existing_order.subtotal + existing_order.tax_amount + existing_order.shipping_cost
+                    existing_order.save()
+
+                    return Response(OrderSerializer(existing_order).data)
+            
+            # Otherwise create new order
             order = serializer.save()
-            
-            # Create initial status history
+
+            subtotal = sum(Decimal(str(item.price)) * item.quantity for item in existing_order.items.all())
+            order.subtotal = subtotal
+            order.tax_amount = subtotal * Decimal('0.1')
+            order.shipping_cost = 10
+            order.total = order.subtotal + order.tax_amount + order.shipping_cost
+            order.save()
             OrderStatusHistory.objects.create(
-                order=order,
-                status=order.status,
-                note="Order created",
-                created_by=request.user
+                order=order, status=order.status, note="Order created", created_by=request.user
             )
-            
-            # Return full order details
-            full_serializer = OrderSerializer(order)
-            return Response(full_serializer.data, status=status.HTTP_201_CREATED)
+            return Response(OrderSerializer(order).data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class OrderDetailAPIView(APIView):
@@ -216,3 +244,45 @@ class OrderStatusHistoryAPIView(APIView):
             'history_count': history.count(),
             'history': serializer.data
         })
+    
+
+
+class CartItemUpdateDeleteAPIView(APIView):
+    """
+    PATCH: update quantity of an item in the cart
+    DELETE: remove item from the cart
+    """
+    def get_object(self, item_id, user):
+        cart_status = OrderStatus.objects.get(code='cart')
+        return get_object_or_404(OrderItem, id=item_id, order__status=cart_status, order__user=user)
+
+    def patch(self, request, item_id):
+        item = self.get_object(item_id, request.user)
+        quantity = request.data.get('quantity')
+        if quantity is None or int(quantity) < 1:
+            return Response({'error': 'Quantity must be >= 1'}, status=status.HTTP_400_BAD_REQUEST)
+        item.quantity = int(quantity)
+        item.save()
+
+        # Update order totals
+        order = item.order
+        order.subtotal = sum(i.price * i.quantity for i in order.items.all())
+        order.tax_amount = order.subtotal * 0.1
+        order.total = order.subtotal + order.tax_amount + order.shipping_cost
+        order.save()
+
+        serializer = OrderItemUpdateSerializer(item)
+        return Response(serializer.data)
+
+    def delete(self, request, item_id):
+        item = self.get_object(item_id, request.user)
+        order = item.order
+        item.delete()
+
+        # Update order totals
+        order.subtotal = sum(i.price * i.quantity for i in order.items.all())
+        order.tax_amount = order.subtotal * 0.1
+        order.total = order.subtotal + order.tax_amount + order.shipping_cost
+        order.save()
+
+        return Response({'message': 'Item removed from cart'}, status=status.HTTP_204_NO_CONTENT)

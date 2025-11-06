@@ -1,4 +1,5 @@
 from django.apps import AppConfig
+from django.db.utils import ProgrammingError, OperationalError
 
 
 class OrderConfig(AppConfig):

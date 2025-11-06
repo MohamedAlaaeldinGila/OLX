@@ -15,6 +15,7 @@ urlpatterns = [
     
     # Vendor products
     path('vendor/my-products/', views.VendorProductListView.as_view(), name='vendor-product-list'),
+    path('all-products/', views.AllProductsView.as_view(), name='all-products'),
     
     # Product images
     path('<int:product_id>/images/', views.ProductImageCreateView.as_view(), name='product-image-create'),
@@ -37,5 +38,6 @@ urlpatterns = [
     # Utility endpoints
     path('products/<int:product_id>/price-history/', views.PriceHistoryView.as_view(), name='price-history'),
     path('discount-usage/', views.DiscountUsageView.as_view(), name='discount-usage'),
+    path('flash-sales/', views.FlashSaleProductsView.as_view(), name='flash-sales'),
 
 ]

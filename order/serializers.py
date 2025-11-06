@@ -2,6 +2,8 @@ from rest_framework import serializers
 from .models import Order, OrderItem, OrderStatus, PaymentStatus, OrderStatusHistory
 from product.models import Product
 from decimal import Decimal
+from django.db import transaction
+from product.serializers import ProductImageSerializer
 
 class OrderStatusSerializer(serializers.ModelSerializer):
     class Meta:
@@ -14,16 +16,38 @@ class PaymentStatusSerializer(serializers.ModelSerializer):
         fields = ['id', 'code', 'name', 'description', 'is_active']
 
 class OrderItemSerializer(serializers.ModelSerializer):
-    product_name = serializers.CharField(source='product.name', read_only=True)
+    product_name = serializers.CharField(source='product.title', read_only=True)
     product_slug = serializers.CharField(source='product.slug', read_only=True)
+    product_stock = serializers.IntegerField(source='product.stock_quantity', read_only=True)
+    primary_image = serializers.SerializerMethodField()
     
     class Meta:
         model = OrderItem
         fields = [
             'id', 'product', 'product_name', 'product_slug', 
-            'quantity', 'price', 'total'
+            'quantity', 'price', 'total', 'product_stock', 'primary_image'
         ]
         read_only_fields = ['id', 'total']
+
+    def get_primary_image(self, obj):
+        """
+        Returns the product's primary image (or first image as fallback).
+        """
+        product = obj.product
+        primary_image = product.images.filter(is_primary=True).first()
+
+        # fallback if no primary image
+        if not primary_image:
+            primary_image = product.images.first()
+
+        if primary_image:
+            return ProductImageSerializer(primary_image).data
+        return None
+
+class OrderItemUpdateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = OrderItem
+        fields = ['quantity']
 
 class OrderItemCreateSerializer(serializers.ModelSerializer):
     class Meta:
@@ -99,39 +123,52 @@ class OrderCreateSerializer(serializers.ModelSerializer):
             'shipping_zipcode', 'shipping_country', 'notes', 'items'
         ]
     
+    @transaction.atomic
     def create(self, validated_data):
         items_data = validated_data.pop('items')
         request = self.context.get('request')
         
         # Calculate totals
-        subtotal = 0
+        subtotal = Decimal('0.00')
         for item_data in items_data:
             product = item_data['product']
-            quantity = item_data['quantity']
-            price = item_data.get('price', product.price)  # Use provided price or product price
-            subtotal += quantity * price
+            price = Decimal(str(item_data.get('price', product.price)))
+            quantity = Decimal(str(item_data.get('quantity', 1)))
+            subtotal += price * quantity
+        
+        # Tax and shipping calculation (could be dynamic later)
+        tax_amount = subtotal * Decimal('0.10')  # 10% tax
+        shipping_cost = Decimal('10.00')
+        discount_amount = validated_data.get('discount_amount', Decimal('0.00'))
+
+        # ✅ Compute total
+        total = subtotal + tax_amount + shipping_cost - discount_amount
+
+        # Default order status
+        initial_status = OrderStatus.objects.filter(code='cart').first()
         
         # Create order
         order = Order.objects.create(
             user=request.user,
             subtotal=subtotal,
-            tax_amount=subtotal * Decimal('0.10'), #10% tax
-            shipping_cost= Decimal('10.00'),  # Example fixed shipping
-            **validated_data
+            tax_amount=tax_amount,
+            shipping_cost=shipping_cost,
+            discount_amount=discount_amount,
+            total=total,
+            status=initial_status,
+            **validated_data,
         )
         
         # Create order items
         for item_data in items_data:
-            product = item_data['product']
-            quantity = item_data['quantity']
-            price = item_data.get('price', product.price)
-            
-            OrderItem.objects.create(
-                order=order,
-                product=product,
-                quantity=quantity,
-                price=price
-            )
+            OrderItem.objects.create(order=order, **item_data)
+
+        OrderStatusHistory.objects.create(
+            order=order,
+            status=initial_status,
+            note="Order created successfully",
+            created_by=request.user
+        )
         
         return order
 

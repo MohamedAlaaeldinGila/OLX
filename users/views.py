@@ -1,4 +1,6 @@
-from django.shortcuts import render, redirect
+from datetime import timedelta
+from venv import logger
+from django.shortcuts import get_object_or_404, render, redirect
 from .forms import UserSignUpForm, CustomAuthenticationForm
 from django.contrib.auth.forms import AuthenticationForm
 from django.contrib.auth import login as auth_login, authenticate
@@ -25,6 +27,13 @@ from .serializers import (
     ChangePasswordSerializer
 )
 from django.contrib.auth import get_user_model, login, logout
+
+from django.core.mail import send_mail
+from django.conf import settings
+
+from django.utils import timezone
+from rest_framework_simplejwt.tokens import AccessToken
+from rest_framework_simplejwt.exceptions import TokenError, InvalidToken
 
 
 User = get_user_model()
@@ -53,7 +62,7 @@ def signup(request):
     return render(request, 'users/signup.html', {'form': form})
 
 
-def login(request):
+'''def login(request):
     if request.method == 'POST':
         form = CustomAuthenticationForm(request, data=request.POST)
 
@@ -185,7 +194,7 @@ def resend_otp(request):
         print(f"New {latest_otp.purpose} OTP sent to {user.email}: {otp_obj.code}")
         return redirect('verify-otp')
     
-    return redirect('login')
+    return redirect('login')'''
 
 class UserRegistrationAPIView(APIView):
     """
@@ -196,26 +205,25 @@ class UserRegistrationAPIView(APIView):
     def post(self, request):
         serializer = UserRegistrationSerializer(data=request.data)
         if serializer.is_valid():
-            user = serializer.save()
-            
-            # Create token for automatic login after registration
-            refresh = RefreshToken.for_user(user)
+            user = serializer.save(is_verified=False)  # Inactive until email verification
+            otp_obj = OTP.generate_otp(user, purpose='signup')
+
+            send_mail(
+                subject="Your OTP Code for Account Verification",
+                message=f"Hello {user.first_name},\n\nYour OTP code is: {otp_obj.code}\n\nUse this code to verify your account.\n\nThank you!",
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                recipient_list=[user.email],
+                fail_silently=False,
+            )
+                        
             
             return Response({
-                'message': 'User registered successfully',
-                'user': {
-                    'id': user.id,
-                    'username': user.username,
-                    'email': user.email,
-                    'first_name': user.first_name,
-                    'last_name': user.last_name,
-                    'user_type': user.user_type
-                },
-                'tokens': {
-                    'refresh': str(refresh),
-                    'access': str(refresh.access_token),
-                }
+                'message': 'User registered successfully. Please verify your email with the OTP sent.',
+                'user_id': user.id,
+                'email': user.email,
+                'next_step': 'verify_otp'
             }, status=status.HTTP_201_CREATED)
+
         
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -514,3 +522,128 @@ class NotificationUnreadListAPIView(APIView):
             'count': notifications.count(),
             'notifications': serializer.data
         })
+    
+
+
+class ForgotPasswordAPIView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        email = request.data.get("email")
+        if not email:
+            return Response({"error": "Email is required"}, status=400)
+
+        user = get_object_or_404(User, email=email)
+        otp_obj = OTP.generate_otp(user, purpose="reset_password")
+
+        print(f"🔑 Password reset OTP for {user.email}: {otp_obj.code}")  # For dev/testing
+
+        # Only return success message
+        return Response({"message": "OTP sent to your email"}, status=200)
+
+
+class VerifyResetOTPAPIView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        email = request.data.get("email")
+        otp_code = request.data.get("otp_code")
+
+        if not email or not otp_code:
+            return Response({"error": "Email and OTP are required"}, status=400)
+
+        user = get_object_or_404(UserProfile, email=email)
+        is_valid, message = OTP.verify_otp(user, otp_code, purpose="reset_password")
+
+        if not is_valid:
+            return Response({"error": message}, status=400)
+
+        # ✅ Create a short-lived JWT for reset
+        refresh = RefreshToken.for_user(user)
+        reset_token = str(refresh.access_token)  # can also add custom claims if needed
+
+        return Response({
+            "message": "OTP verified",
+            "reset_token": reset_token
+        }, status=200)
+
+class ResetPasswordAPIView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        email = request.data.get("email")
+        new_password = request.data.get("new_password")
+        confirm_password = request.data.get("confirm_password")
+        reset_token = request.data.get("reset_token")
+
+        if not all([email, new_password, confirm_password, reset_token]):
+            return Response({"error": "All fields are required"}, status=400)
+        if new_password != confirm_password:
+            return Response({"error": "Passwords do not match"}, status=400)
+
+        user = get_object_or_404(UserProfile, email=email)
+
+        # ✅ Verify the token belongs to this user
+        jwt_auth = JWTAuthentication()
+        try:
+            validated_token = jwt_auth.get_validated_token(reset_token)
+            token_user = jwt_auth.get_user(validated_token)
+            if token_user != user:
+                return Response({"error": "Invalid token for this user"}, status=400)
+        except TokenError:
+            return Response({"error": "Invalid or expired token"}, status=400)
+
+        # ✅ Reset password
+        user.set_password(new_password)
+        user.save()
+
+        return Response({"message": "Password reset successful. You can now log in."}, status=200)
+
+
+class VerifyOTPAPIView(APIView):
+    """
+    POST: Verify OTP for signup
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        email = request.data.get("email")
+        code = request.data.get("code")
+
+        if not email or not code:
+            return Response({"error": "Email and code are required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            user = User.objects.get(email=email)
+        except User.DoesNotExist:
+            return Response({"error": "User not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            otp = OTP.objects.filter(user=user, is_used=False, purpose="signup").order_by("-created_at").first()
+            print(f"🔍 DEBUG: Found OTP - {otp}")
+            if not otp:
+                return Response({"error": "No active OTP found."}, status=status.HTTP_400_BAD_REQUEST)
+
+            # call your OTP verification method
+            is_valid, message = OTP.verify_otp(user, code, purpose="signup")
+
+            if not is_valid:
+                return Response({"error": message}, status=status.HTTP_400_BAD_REQUEST)
+
+            # ✅ Mark user verified and active
+            user.is_verified = True
+            user.is_active = True
+            user.save()
+
+            # Mark OTP as used
+            otp.is_used = True
+            #otp.used_at = timezone.now()
+            otp.save()
+
+
+
+            return Response({"message": "Email verified successfully!"}, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            logger.error(f"OTP verification error: {e}")
+            return Response({"error": "Internal server error. {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

@@ -39,7 +39,8 @@ class UserProfile(AbstractUser):
     address = models.CharField(blank=True, null=True)
     date_of_birth = models.DateField(blank=True, null=True)
     is_2fa_enabled = models.BooleanField(default=False)
-    is_active = models.BooleanField(default=False)
+    is_active = models.BooleanField(default=True)
+    is_verified = models.BooleanField(default=False)
 
     def __str__(self):
         return f"{self.username} Profile"
@@ -218,7 +219,7 @@ class OTP(models.Model):
     def generate_otp(cls, user, purpose='login'):
         """Generate and send OTP"""
         # Delete any existing unused OTPs for this user and purpose
-        cls.objects.filter(user=user, purpose=purpose, is_used=False).delete()
+        cls.objects.filter(user=user, purpose=purpose, is_used=False).update(is_used=False)
         
         # Generate secure 6-digit code
         code = str(random.randint(100000, 999999))
@@ -228,7 +229,9 @@ class OTP(models.Model):
             user=user,
             code=code,
             purpose=purpose,
-            expires_at=timezone.now() + timedelta(minutes=5)
+            expires_at= timezone.now() + timedelta(minutes=5),
+            is_used=False,
+            attempts=0
         )
         
         # Send email
@@ -246,11 +249,11 @@ class OTP(models.Model):
     def verify_otp(cls, user, code, purpose='login'):
         """Verify OTP code"""
         try:
-            otp = cls.objects.get(
+            otp = cls.objects.filter(
                 user=user, 
                 purpose=purpose, 
                 is_used=False
-            )
+            ).order_by("-created_at").first()
             
             if not otp.is_valid():
                 return False, "OTP expired or invalid"

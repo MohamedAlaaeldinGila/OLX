@@ -10,6 +10,7 @@ from .models import Product, ProductImage, Review, Category
 from .serializers import *
 from rest_framework import generics
 from django.utils import timezone
+from django.db import models
 
 class CategoryListView(APIView):
     permission_classes = [permissions.AllowAny]
@@ -93,13 +94,23 @@ class ProductCreateView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     
     def post(self, request):
+        user = request.user
+
+        # Check if the user is a vendor
+        if not user.is_vendor:
+            return Response(
+                {"detail": "Only vendors can add products."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         serializer = ProductCreateSerializer(data=request.data)
         if serializer.is_valid():
-            # Add the vendor (current user) to the validated data
-            product = serializer.save(vendor=request.user)
+            # Save the product with the vendor as the current user
+            product = serializer.save(vendor=user)
             return Response(ProductDetailSerializer(product).data, status=status.HTTP_201_CREATED)
+        
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
+    
 class ProductUpdateView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     
@@ -595,4 +606,63 @@ class VendorDiscountProductsView(APIView):
         
         vendor_products = Product.objects.filter(vendor=request.user, is_active=True)
         serializer = ProductSerializer(vendor_products, many=True)
+        return Response(serializer.data)
+    
+
+class FlashSaleProductsView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request):
+        now = timezone.now()
+        # Define "flash sale" as discounts ending within the next 24 hours
+        upcoming_threshold = now + timezone.timedelta(hours=24)
+
+        # Filter discounts that are active and expiring soon
+        flash_discounts = Discount.objects.filter(
+            is_active=True,
+            status='active',
+            end_date__lte=upcoming_threshold,
+            end_date__gte=now
+        ).prefetch_related('products')
+
+        products = Product.objects.filter(
+            discounts__in=flash_discounts,
+            is_active=True
+        ).annotate(
+            average_rating=models.Avg('reviews__rating'),
+            review_count=models.Count('reviews')
+        ).distinct()
+
+        serializer = ProductListSerializer(products, many=True)
+        return Response({
+            "flash_sales": serializer.data,
+            "current_time": now,
+        })
+
+class AllProductsView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request):
+        queryset = Product.objects.filter(is_active=True)
+
+        # Optional: handle filters (like search, category, etc.)
+        category_slug = request.query_params.get('category')
+        if category_slug:
+            queryset = queryset.filter(categories__slug=category_slug)
+
+        search_query = request.query_params.get('search')
+        if search_query:
+            queryset = queryset.filter(
+                Q(title__icontains=search_query) |
+                Q(description__icontains=search_query) |
+                Q(categories__name__icontains=search_query)
+            )
+
+        # Annotate ratings
+        queryset = queryset.annotate(
+            average_rating=Avg('reviews__rating'),
+            review_count=Count('reviews')
+        )
+
+        serializer = ProductListSerializer(queryset, many=True)
         return Response(serializer.data)

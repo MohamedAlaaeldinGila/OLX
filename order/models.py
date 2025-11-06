@@ -45,6 +45,7 @@ class PaymentStatus(models.Model):
 
 class Order(models.Model):
     """ORDER_STATUS = [
+        ('cart', 'Cart'),
         ('pending', 'Pending'),
         ('confirmed', 'Confirmed'),
         ('processing', 'Processing'),
@@ -113,27 +114,37 @@ class Order(models.Model):
         return f"Order #{self.order_number} - {self.user.username}"
     
     def save(self, *args, **kwargs):
-        # 1. Check if status is changing
-        status_changed = False
+        is_new = self._state.adding
         old_status = None
-        
-        if self.pk:  # This order already exists in database
-            old_order = Order.objects.get(pk=self.pk)
-            old_status = old_order.status
-            if old_status != self.status:
-                status_changed = True
-        
-        # 2. Your existing logic
+
+        if not is_new:
+            try:
+                old_status = Order.objects.get(pk=self.pk).status
+            except Order.DoesNotExist:
+                pass
+
+        # ✅ Calculate totals safely (include discount)
+        self.total = (
+            self.subtotal
+            + self.tax_amount
+            + self.shipping_cost
+            - self.discount_amount
+        )
+
+        # ✅ Auto-generate order number once
         if not self.order_number:
-            self.order_number = self.generate_order_number()
-        self.total = self.subtotal + self.tax_amount + self.shipping_cost
-        
-        # 3. Save first (so we have ID for notification)
+            self.order_number = f"ORD-{timezone.now().strftime('%Y%m%d%H%M%S')}-{self.user.id}"
+
         super().save(*args, **kwargs)
+
+        # ✅ Handle status change (after saving)
+        if old_status and old_status != self.status:
+            self.send_status_change_notification()
+
         
-        # 4. Send notification AFTER saving
+        """# 4. Send notification AFTER saving
         if status_changed and old_status:
-            self.send_status_change_notification(old_status, self.status)
+            self.send_status_change_notification(old_status, self.status)"""
     
     def generate_order_number(self):
         return f"ORD{''.join(random.choices(string.digits, k=10))}"
@@ -179,7 +190,7 @@ class OrderItem(models.Model):
         super().save(*args, **kwargs)
     
     def __str__(self):
-        return f"{self.quantity} x {self.product.name}"
+        return f"{self.quantity} x {self.product.title}"
 
 class OrderStatusHistory(models.Model):
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='status_history')

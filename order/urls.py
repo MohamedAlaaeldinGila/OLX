@@ -1,4 +1,6 @@
 from django.urls import path, include
+
+from product import views
 from .views import (
     # Order views
     OrderListCreateAPIView,
@@ -14,7 +16,10 @@ from .views import (
     OrderItemsListAPIView,
     
     # Order History views
-    OrderStatusHistoryAPIView
+    OrderStatusHistoryAPIView,
+
+    # Cart views
+    CartItemUpdateDeleteAPIView
 )
 
 urlpatterns = [
@@ -41,4 +46,8 @@ urlpatterns = [
     path('<int:order_pk>/items/', OrderItemsListAPIView.as_view(), name='order-items'),
     # Get status history for a specific order
     path('<int:order_pk>/status-history/', OrderStatusHistoryAPIView.as_view(), name='order-status-history'),
+
+    # update or delete specific cart item
+    path('cart/item/<int:item_id>/', CartItemUpdateDeleteAPIView.as_view(), name='cart-item-update-delete'),
+
 ]
